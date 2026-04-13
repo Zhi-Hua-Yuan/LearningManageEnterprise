@@ -14,6 +14,7 @@ import com.spt.learningmanage.model.vo.dashboard.DailyTrendVO;
 import com.spt.learningmanage.model.vo.dashboard.DashboardVO;
 import com.spt.learningmanage.model.vo.dashboard.ProjectRankingVO;
 import com.spt.learningmanage.service.StatsService;
+import com.spt.learningmanage.service.TenantService;
 import com.spt.learningmanage.utils.UserHolder;
 import jakarta.annotation.Resource;
 import org.springframework.stereotype.Service;
@@ -40,35 +41,42 @@ public class StatsServiceImpl implements StatsService {
     @Resource
     private TaskMapper taskMapper;
 
+    @Resource
+    private TenantService tenantService;
+
     @Override
     public DashboardVO getOverview() {
         Long userId = getCurrentUserId();
+        Long tenantId = resolveTenantId();
         LocalDate today = LocalDate.now();
 
         DashboardVO dashboardVO = new DashboardVO();
-        dashboardVO.setCoreMetrics(buildCoreMetrics(userId, today));
-        dashboardVO.setProjectRankings(buildProjectRankings(userId));
-        dashboardVO.setDailyTrends(buildDailyTrends(userId, today));
+        dashboardVO.setCoreMetrics(buildCoreMetrics(tenantId, userId, today));
+        dashboardVO.setProjectRankings(buildProjectRankings(tenantId, userId));
+        dashboardVO.setDailyTrends(buildDailyTrends(tenantId, userId, today));
         return dashboardVO;
     }
 
-    private CoreMetricsVO buildCoreMetrics(Long userId, LocalDate today) {
+    private CoreMetricsVO buildCoreMetrics(Long tenantId, Long userId, LocalDate today) {
         CoreMetricsVO coreMetricsVO = new CoreMetricsVO();
 
         LambdaQueryWrapper<Project> ongoingProjectWrapper = new LambdaQueryWrapper<>();
-        ongoingProjectWrapper.eq(Project::getUserId, userId)
+        ongoingProjectWrapper.eq(Project::getTenantId, tenantId)
+                .eq(Project::getUserId, userId)
                 .eq(Project::getStatus, ProjectConstant.STATUS_ACTIVE)
                 .isNull(Project::getDeletedAt);
         coreMetricsVO.setOngoingProjectCount(toInteger(projectMapper.selectCount(ongoingProjectWrapper)));
 
         LambdaQueryWrapper<Task> overdueTaskWrapper = new LambdaQueryWrapper<>();
-        overdueTaskWrapper.eq(Task::getUserId, userId)
+        overdueTaskWrapper.eq(Task::getTenantId, tenantId)
+                .eq(Task::getUserId, userId)
                 .lt(Task::getDueDate, today)
                 .ne(Task::getStatus, TaskStatusEnum.DONE.getValue());
         coreMetricsVO.setOverdueTaskCount(toInteger(taskMapper.selectCount(overdueTaskWrapper)));
 
         LambdaQueryWrapper<Task> dueTodayTaskWrapper = new LambdaQueryWrapper<>();
-        dueTodayTaskWrapper.eq(Task::getUserId, userId)
+        dueTodayTaskWrapper.eq(Task::getTenantId, tenantId)
+                .eq(Task::getUserId, userId)
                 .eq(Task::getDueDate, today)
                 .ne(Task::getStatus, TaskStatusEnum.DONE.getValue());
         coreMetricsVO.setDueTodayTaskCount(toInteger(taskMapper.selectCount(dueTodayTaskWrapper)));
@@ -76,9 +84,10 @@ public class StatsServiceImpl implements StatsService {
         return coreMetricsVO;
     }
 
-    private List<ProjectRankingVO> buildProjectRankings(Long userId) {
+    private List<ProjectRankingVO> buildProjectRankings(Long tenantId, Long userId) {
         LambdaQueryWrapper<Project> rankingWrapper = new LambdaQueryWrapper<>();
-        rankingWrapper.eq(Project::getUserId, userId)
+        rankingWrapper.eq(Project::getTenantId, tenantId)
+                .eq(Project::getUserId, userId)
                 .isNull(Project::getDeletedAt)
                 .orderByDesc(Project::getProgress)
                 .orderByDesc(Project::getUpdateTime)
@@ -89,13 +98,14 @@ public class StatsServiceImpl implements StatsService {
                 .toList();
     }
 
-    private List<DailyTrendVO> buildDailyTrends(Long userId, LocalDate today) {
+    private List<DailyTrendVO> buildDailyTrends(Long tenantId, Long userId, LocalDate today) {
         LocalDate startDate = today.minusDays(TREND_DAYS - 1L);
         LocalDateTime rangeStart = startDate.atStartOfDay();
         LocalDateTime rangeEndExclusive = today.plusDays(1L).atStartOfDay();
 
         LambdaQueryWrapper<Task> completedTaskWrapper = new LambdaQueryWrapper<>();
-        completedTaskWrapper.eq(Task::getUserId, userId)
+        completedTaskWrapper.eq(Task::getTenantId, tenantId)
+                .eq(Task::getUserId, userId)
                 .eq(Task::getStatus, TaskStatusEnum.DONE.getValue())
                 .ge(Task::getCompletedAt, rangeStart)
                 .lt(Task::getCompletedAt, rangeEndExclusive);
@@ -143,6 +153,10 @@ public class StatsServiceImpl implements StatsService {
             throw new BusinessException(ErrorCode.NOT_LOGIN_ERROR);
         }
         return userId;
+    }
+
+    private Long resolveTenantId() {
+        return tenantService.resolveCurrentTenantId();
     }
 }
 

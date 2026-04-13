@@ -9,6 +9,13 @@ logging:
   level:
     root: info
 
+# 租户配置 (开发环境：兼容模式，无需 header，不校验)
+tenant:
+  header-name: X-Tenant-Id
+  required: false              # 不强制传租户头
+  validation-enabled: false    # 不校验租户可用性
+  mybatis-tenant-enabled: false # 开发环境默认关闭，避免调试期误伤复杂 SQL
+
 # AI 大模型配置 (阿里云通义千问)
 ai:
   # 使用 ${} 读取系统环境变量，冒号后面是默认值（如果没有配置环境变量就用默认值）

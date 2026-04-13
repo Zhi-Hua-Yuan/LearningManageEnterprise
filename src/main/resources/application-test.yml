@@ -8,3 +8,10 @@ spring:
 logging:
   level:
     root: warn
+
+# 租户配置 (测试环境：适度校验)
+tenant:
+  header-name: X-Tenant-Id
+  required: false              # 兼容旧请求，但接受新请求带头
+  validation-enabled: true     # 校验租户存在性与状态
+  mybatis-tenant-enabled: true # 测试环境开启 MyBatis 租户拦截灰度验证
