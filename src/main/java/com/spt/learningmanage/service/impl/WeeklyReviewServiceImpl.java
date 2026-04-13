@@ -4,6 +4,7 @@ import cn.hutool.core.date.DateTime;
 import cn.hutool.core.date.DateUtil;
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
+import com.spt.learningmanage.constant.TaskStatusEnum;
 import com.spt.learningmanage.exception.BusinessException;
 import com.spt.learningmanage.exception.ErrorCode;
 import com.spt.learningmanage.mapper.ProjectMapper;
@@ -12,6 +13,7 @@ import com.spt.learningmanage.mapper.WeeklyReviewMapper;
 import com.spt.learningmanage.model.entity.Project;
 import com.spt.learningmanage.model.entity.Task;
 import com.spt.learningmanage.model.entity.WeeklyReview;
+import com.spt.learningmanage.service.TenantService;
 import com.spt.learningmanage.service.WeeklyReviewService;
 import com.spt.learningmanage.utils.UserHolder;
 import jakarta.annotation.Resource;
@@ -28,9 +30,9 @@ import java.util.Map;
 public class WeeklyReviewServiceImpl implements WeeklyReviewService {
 
     /**
-     * 按需求固定使用 status=1 作为“已完成”状态。
+     * 与任务主流程保持一致：DONE=2。
      */
-    private static final int COMPLETED_STATUS = 1;
+    private static final int COMPLETED_STATUS = TaskStatusEnum.DONE.getValue();
 
     @Resource
     private WeeklyReviewMapper weeklyReviewMapper;
@@ -41,28 +43,38 @@ public class WeeklyReviewServiceImpl implements WeeklyReviewService {
     @Resource
     private ProjectMapper projectMapper;
 
+    @Resource
+    private TenantService tenantService;
+
     @Override
     public WeeklyReview getCurrentWeekReview() {
         Long userId = getCurrentUserId();
+        Long tenantId = resolveTenantId();
 
         DateTime now = DateUtil.date();
         int year = DateUtil.year(now);
         int weekNo = DateUtil.weekOfYear(now);
-
-        WeeklyReview existing = findByUserYearWeek(userId, year, weekNo);
-        if (existing != null) {
-            return existing;
-        }
 
         LocalDate startDate = toLocalDate(DateUtil.beginOfWeek(now));
         LocalDate endDate = toLocalDate(DateUtil.endOfWeek(now));
         LocalDateTime startDateTime = startDate.atStartOfDay();
         LocalDateTime endDateTimeExclusive = endDate.plusDays(1L).atStartOfDay();
 
-        int completedTaskCount = countCompletedTasks(userId, startDateTime, endDateTimeExclusive);
-        String focusProjectName = queryFocusProjectName(userId, startDateTime, endDateTimeExclusive);
+        int completedTaskCount = countCompletedTasks(tenantId, userId, startDateTime, endDateTimeExclusive);
+        String focusProjectName = queryFocusProjectName(tenantId, userId, startDateTime, endDateTimeExclusive);
+
+        WeeklyReview existing = findByUserYearWeek(tenantId, userId, year, weekNo);
+        if (existing != null) {
+            // Keep subjective content from saved review, but refresh computed snapshot fields.
+            existing.setStartDate(startDate);
+            existing.setEndDate(endDate);
+            existing.setCompletedTaskCount(completedTaskCount);
+            existing.setFocusProjectName(focusProjectName);
+            return existing;
+        }
 
         WeeklyReview draft = new WeeklyReview();
+        draft.setTenantId(tenantId);
         draft.setUserId(userId);
         draft.setYear(year);
         draft.setWeekNo(weekNo);
@@ -76,9 +88,10 @@ public class WeeklyReviewServiceImpl implements WeeklyReviewService {
     @Override
     public void saveReview(WeeklyReview weeklyReview) {
         Long userId = getCurrentUserId();
+        Long tenantId = resolveTenantId();
         validateSaveRequest(weeklyReview);
 
-        WeeklyReview existing = findByUserYearWeek(userId, weeklyReview.getYear(), weeklyReview.getWeekNo());
+        WeeklyReview existing = findByUserYearWeek(tenantId, userId, weeklyReview.getYear(), weeklyReview.getWeekNo());
         if (existing != null) {
             applyUpdatableFields(existing, weeklyReview);
             int rows = weeklyReviewMapper.updateById(existing);
@@ -89,6 +102,7 @@ public class WeeklyReviewServiceImpl implements WeeklyReviewService {
         }
 
         WeeklyReview toSave = new WeeklyReview();
+        toSave.setTenantId(tenantId);
         toSave.setUserId(userId);
         toSave.setYear(weeklyReview.getYear());
         toSave.setWeekNo(weeklyReview.getWeekNo());
@@ -107,18 +121,15 @@ public class WeeklyReviewServiceImpl implements WeeklyReviewService {
 
     @Override
     public WeeklyReview getReviewById(Long id) {
+        Long tenantId = resolveTenantId();
+        Long currentUserId = getCurrentUserId();
         if (id == null || id <= 0) {
             throw new BusinessException(ErrorCode.PARAMS_ERROR, "无效的周总结ID");
         }
 
-        WeeklyReview review = weeklyReviewMapper.selectById(id);
+        WeeklyReview review = findByIdWithinScope(tenantId, currentUserId, id);
         if (review == null) {
             throw new BusinessException(ErrorCode.NOT_FOUND_ERROR, "该周总结不存在");
-        }
-
-        Long currentUserId = getCurrentUserId();
-        if (!currentUserId.equals(review.getUserId())) {
-            throw new BusinessException(ErrorCode.NO_AUTH_ERROR, "无权查看他人的周总结");
         }
 
         return review;
@@ -126,16 +137,15 @@ public class WeeklyReviewServiceImpl implements WeeklyReviewService {
 
     @Override
     public void updateReview(WeeklyReview weeklyReview) {
+        Long tenantId = resolveTenantId();
+        Long userId = getCurrentUserId();
         if (weeklyReview == null || weeklyReview.getId() == null) {
             throw new BusinessException(ErrorCode.PARAMS_ERROR, "周总结ID不能为空");
         }
 
-        WeeklyReview oldReview = weeklyReviewMapper.selectById(weeklyReview.getId());
+        WeeklyReview oldReview = findByIdWithinScope(tenantId, userId, weeklyReview.getId());
         if (oldReview == null) {
             throw new BusinessException(ErrorCode.NOT_FOUND_ERROR, "该周总结不存在");
-        }
-        if (!oldReview.getUserId().equals(getCurrentUserId())) {
-            throw new BusinessException(ErrorCode.NO_AUTH_ERROR, "无权修改他人的周总结");
         }
 
         oldReview.setReflection(weeklyReview.getReflection());
@@ -148,20 +158,22 @@ public class WeeklyReviewServiceImpl implements WeeklyReviewService {
 
     @Override
     public void deleteReview(Long id) {
+        Long tenantId = resolveTenantId();
+        Long userId = getCurrentUserId();
         if (id == null || id <= 0) {
             throw new BusinessException(ErrorCode.PARAMS_ERROR, "无效的周总结ID");
         }
 
-        WeeklyReview review = weeklyReviewMapper.selectById(id);
+        WeeklyReview review = findByIdWithinScope(tenantId, userId, id);
         if (review == null) {
             return;
         }
 
-        if (!review.getUserId().equals(getCurrentUserId())) {
-            throw new BusinessException(ErrorCode.NO_AUTH_ERROR, "无权删除他人的周总结");
-        }
-
-        int rows = weeklyReviewMapper.deleteById(id);
+        LambdaQueryWrapper<WeeklyReview> deleteWrapper = new LambdaQueryWrapper<>();
+        deleteWrapper.eq(WeeklyReview::getId, id)
+                .eq(WeeklyReview::getTenantId, tenantId)
+                .eq(WeeklyReview::getUserId, userId);
+        int rows = weeklyReviewMapper.delete(deleteWrapper);
         if (rows != 1) {
             throw new BusinessException(ErrorCode.OPERATION_ERROR, "删除周总结失败");
         }
@@ -170,25 +182,38 @@ public class WeeklyReviewServiceImpl implements WeeklyReviewService {
     @Override
     public List<WeeklyReview> listHistory() {
         Long userId = getCurrentUserId();
+        Long tenantId = resolveTenantId();
         LambdaQueryWrapper<WeeklyReview> wrapper = new LambdaQueryWrapper<>();
-        wrapper.eq(WeeklyReview::getUserId, userId)
+        wrapper.eq(WeeklyReview::getTenantId, tenantId)
+                .eq(WeeklyReview::getUserId, userId)
                 .orderByDesc(WeeklyReview::getYear)
                 .orderByDesc(WeeklyReview::getWeekNo);
         return weeklyReviewMapper.selectList(wrapper);
     }
 
-    private WeeklyReview findByUserYearWeek(Long userId, Integer year, Integer weekNo) {
+    private WeeklyReview findByUserYearWeek(Long tenantId, Long userId, Integer year, Integer weekNo) {
         LambdaQueryWrapper<WeeklyReview> wrapper = new LambdaQueryWrapper<>();
-        wrapper.eq(WeeklyReview::getUserId, userId)
+        wrapper.eq(WeeklyReview::getTenantId, tenantId)
+                .eq(WeeklyReview::getUserId, userId)
                 .eq(WeeklyReview::getYear, year)
                 .eq(WeeklyReview::getWeekNo, weekNo)
                 .last("limit 1");
         return weeklyReviewMapper.selectOne(wrapper);
     }
 
-    private int countCompletedTasks(Long userId, LocalDateTime startDateTime, LocalDateTime endDateTimeExclusive) {
+    private WeeklyReview findByIdWithinScope(Long tenantId, Long userId, Long id) {
+        LambdaQueryWrapper<WeeklyReview> wrapper = new LambdaQueryWrapper<>();
+        wrapper.eq(WeeklyReview::getId, id)
+                .eq(WeeklyReview::getTenantId, tenantId)
+                .eq(WeeklyReview::getUserId, userId)
+                .last("limit 1");
+        return weeklyReviewMapper.selectOne(wrapper);
+    }
+
+    private int countCompletedTasks(Long tenantId, Long userId, LocalDateTime startDateTime, LocalDateTime endDateTimeExclusive) {
         LambdaQueryWrapper<Task> wrapper = new LambdaQueryWrapper<>();
-        wrapper.eq(Task::getUserId, userId)
+        wrapper.eq(Task::getTenantId, tenantId)
+                .eq(Task::getUserId, userId)
                 .eq(Task::getStatus, COMPLETED_STATUS)
                 .ge(Task::getCompletedAt, startDateTime)
                 .lt(Task::getCompletedAt, endDateTimeExclusive);
@@ -196,11 +221,12 @@ public class WeeklyReviewServiceImpl implements WeeklyReviewService {
         return count == null ? 0 : Math.toIntExact(count);
     }
 
-    private String queryFocusProjectName(Long userId, LocalDateTime startDateTime, LocalDateTime endDateTimeExclusive) {
+    private String queryFocusProjectName(Long tenantId, Long userId, LocalDateTime startDateTime, LocalDateTime endDateTimeExclusive) {
         QueryWrapper<Task> topProjectWrapper = new QueryWrapper<>();
         topProjectWrapper.select("project_id", "COUNT(*) AS completed_count")
+                .eq("tenant_id", tenantId)
                 .eq("user_id", userId)
-                .eq("status", COMPLETED_STATUS)
+                .eq("status", TaskStatusEnum.DONE.getValue())
                 .ge("completed_at", startDateTime)
                 .lt("completed_at", endDateTimeExclusive)
                 .groupBy("project_id")
@@ -220,6 +246,7 @@ public class WeeklyReviewServiceImpl implements WeeklyReviewService {
 
         LambdaQueryWrapper<Project> projectWrapper = new LambdaQueryWrapper<>();
         projectWrapper.eq(Project::getId, projectId)
+                .eq(Project::getTenantId, tenantId)
                 .eq(Project::getUserId, userId)
                 .last("limit 1");
         Project project = projectMapper.selectOne(projectWrapper);
@@ -302,5 +329,8 @@ public class WeeklyReviewServiceImpl implements WeeklyReviewService {
         }
         return userId;
     }
-}
 
+    private Long resolveTenantId() {
+        return tenantService.resolveCurrentTenantId();
+    }
+}

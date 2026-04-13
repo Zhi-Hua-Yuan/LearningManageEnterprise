@@ -18,6 +18,12 @@ mybatis-plus:
       logic-delete-value: 1
       logic-not-delete-value: 0
 
+tenant:
+  header-name: X-Tenant-Id
+  required: false
+  validation-enabled: false
+  mybatis-tenant-enabled: false
+
 # AI 大模型配置 (阿里云通义千问)
 ai:
   # 使用 ${} 读取系统环境变量，冒号后面是默认值（如果没有配置环境变量就用默认值）

@@ -16,6 +16,7 @@ public class Milestone {
     @TableId(type = IdType.ASSIGN_ID)
     private Long id;
 
+    private Long tenantId;
     private Long projectId;
     private Long userId;
     private String name;

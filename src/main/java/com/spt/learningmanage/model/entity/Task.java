@@ -15,6 +15,7 @@ public class Task {
     @TableId(type = IdType.ASSIGN_ID)
     private Long id;
 
+    private Long tenantId;
     private Long projectId;
     private Long milestoneId;
     private Long userId;

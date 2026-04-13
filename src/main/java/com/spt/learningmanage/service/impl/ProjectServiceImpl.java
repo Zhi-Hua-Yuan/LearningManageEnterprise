@@ -9,19 +9,24 @@ import com.spt.learningmanage.exception.ErrorCode;
 import com.spt.learningmanage.mapper.ProjectMapper;
 import com.spt.learningmanage.model.dto.project.ProjectCreateRequest;
 import com.spt.learningmanage.model.dto.project.ProjectQueryRequest;
+import com.spt.learningmanage.model.dto.project.ProjectReorderRequest;
 import com.spt.learningmanage.model.dto.project.ProjectUpdateRequest;
 import com.spt.learningmanage.model.entity.Project;
 import com.spt.learningmanage.model.vo.project.ProjectVo;
 import com.spt.learningmanage.service.ProjectService;
+import com.spt.learningmanage.service.TenantService;
 import com.spt.learningmanage.utils.UserHolder;
 import jakarta.annotation.Resource;
 import org.springframework.beans.BeanUtils;
 import org.springframework.stereotype.Service;
 import org.springframework.util.StringUtils;
+import org.springframework.transaction.annotation.Transactional;
 
 import java.time.LocalDate;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Objects;
+import java.util.Set;
 
 @Service
 public class ProjectServiceImpl implements ProjectService {
@@ -29,12 +34,16 @@ public class ProjectServiceImpl implements ProjectService {
     @Resource
     private ProjectMapper projectMapper;
 
+    @Resource
+    private TenantService tenantService;
+
     /**
      * 创建项目，返回项目ID。
      */
     @Override
     public Long create(ProjectCreateRequest projectCreateRequest) {
         Long userId = UserHolder.get();
+        Long tenantId = resolveTenantId();
         if (userId == null) {
             throw new BusinessException(ErrorCode.NOT_LOGIN_ERROR);
         }
@@ -51,7 +60,9 @@ public class ProjectServiceImpl implements ProjectService {
         project.setEndDate(projectCreateRequest.getEndDate());
         project.setStatus(ProjectConstant.STATUS_ACTIVE);
         project.setIsDelete(0);
+        project.setTenantId(tenantId);
         project.setUserId(userId);
+        project.setOrderNo(getNextOrderNo(tenantId, userId));
 
         int rows = projectMapper.insert(project);
         if (rows != 1 || project.getId() == null) {
@@ -66,6 +77,7 @@ public class ProjectServiceImpl implements ProjectService {
     @Override
     public ProjectVo getById(Long id) {
         Long userId = UserHolder.get();
+        Long tenantId = resolveTenantId();
         if (userId == null) {
             throw new BusinessException(ErrorCode.NOT_LOGIN_ERROR);
         }
@@ -73,7 +85,9 @@ public class ProjectServiceImpl implements ProjectService {
             throw new BusinessException(ErrorCode.PARAMS_ERROR, "项目 ID 不能为空");
         }
         LambdaQueryWrapper<Project> wrapper = new LambdaQueryWrapper<>();
-        wrapper.eq(Project::getId, id).eq(Project::getUserId, userId);
+        wrapper.eq(Project::getId, id)
+                .eq(Project::getTenantId, tenantId)
+                .eq(Project::getUserId, userId);
         Project project = projectMapper.selectOne(wrapper);
         if (project == null) {
             throw new BusinessException(ErrorCode.PROJECT_NOT_FOUND);
@@ -87,6 +101,7 @@ public class ProjectServiceImpl implements ProjectService {
     @Override
     public Page<ProjectVo> list(ProjectQueryRequest projectQueryRequest) {
         Long userId = UserHolder.get();
+        Long tenantId = resolveTenantId();
         if (userId == null) {
             throw new BusinessException(ErrorCode.NOT_LOGIN_ERROR);
         }
@@ -97,6 +112,7 @@ public class ProjectServiceImpl implements ProjectService {
 
         LambdaQueryWrapper<Project> wrapper = new LambdaQueryWrapper<>();
         wrapper.isNull(Project::getDeletedAt);
+        wrapper.eq(Project::getTenantId, tenantId);
         wrapper.eq(Project::getUserId, userId);
         if (validProjectQueryRequest.getStatus() != null) {
             wrapper.eq(Project::getStatus, validProjectQueryRequest.getStatus());
@@ -104,7 +120,7 @@ public class ProjectServiceImpl implements ProjectService {
         if (StringUtils.hasText(validProjectQueryRequest.getKeyword())) {
             wrapper.like(Project::getName, validProjectQueryRequest.getKeyword());
         }
-        wrapper.orderByDesc(Project::getCreateTime);
+        wrapper.orderByAsc(Project::getOrderNo).orderByDesc(Project::getCreateTime);
 
         Page<Project> page = new Page<>(pageNum, pageSize);
         Page<Project> resultPage = projectMapper.selectPage(page, wrapper);
@@ -119,6 +135,7 @@ public class ProjectServiceImpl implements ProjectService {
     @Override
     public void update(ProjectUpdateRequest projectUpdateRequest) {
         Long userId = UserHolder.get();
+        Long tenantId = resolveTenantId();
         if (userId == null) {
             throw new BusinessException(ErrorCode.NOT_LOGIN_ERROR);
         }
@@ -126,7 +143,9 @@ public class ProjectServiceImpl implements ProjectService {
             throw new BusinessException(ErrorCode.PARAMS_ERROR, "项目 ID 不能为空");
         }
         LambdaQueryWrapper<Project> wrapper = new LambdaQueryWrapper<>();
-        wrapper.eq(Project::getId, projectUpdateRequest.getId()).eq(Project::getUserId, userId);
+        wrapper.eq(Project::getId, projectUpdateRequest.getId())
+                .eq(Project::getTenantId, tenantId)
+                .eq(Project::getUserId, userId);
         Project existing = projectMapper.selectOne(wrapper);
         if (existing == null) {
             throw new BusinessException(ErrorCode.PROJECT_NOT_FOUND);
@@ -155,6 +174,7 @@ public class ProjectServiceImpl implements ProjectService {
         update.setStatus(newStatus);
         update.setStartDate(newStartDate);
         update.setEndDate(newEndDate);
+        update.setTenantId(tenantId);
         update.setUserId(userId);
 
         int rows = projectMapper.updateById(update);
@@ -164,11 +184,66 @@ public class ProjectServiceImpl implements ProjectService {
     }
 
     /**
+     * 调整项目排序。
+     */
+    @Transactional(rollbackFor = Exception.class)
+    @Override
+    public void reorder(List<ProjectReorderRequest> reorderRequests) {
+        Long userId = UserHolder.get();
+        Long tenantId = resolveTenantId();
+        if (userId == null) {
+            throw new BusinessException(ErrorCode.NOT_LOGIN_ERROR);
+        }
+        if (reorderRequests == null || reorderRequests.isEmpty()) {
+            throw new BusinessException(ErrorCode.PARAMS_ERROR, "排序列表不能为空");
+        }
+
+        Set<Long> idSet = new HashSet<>();
+        Set<Integer> orderNoSet = new HashSet<>();
+        for (ProjectReorderRequest reorderRequest : reorderRequests) {
+            if (reorderRequest == null || reorderRequest.getId() == null || reorderRequest.getId() <= 0) {
+                throw new BusinessException(ErrorCode.PARAMS_ERROR, "项目 ID 不合法");
+            }
+            if (reorderRequest.getOrderNo() == null || reorderRequest.getOrderNo() < 0) {
+                throw new BusinessException(ErrorCode.PARAMS_ERROR, "排序序号不合法");
+            }
+            if (!idSet.add(reorderRequest.getId())) {
+                throw new BusinessException(ErrorCode.PARAMS_ERROR, "项目列表中存在重复 ID");
+            }
+            if (!orderNoSet.add(reorderRequest.getOrderNo())) {
+                throw new BusinessException(ErrorCode.PARAMS_ERROR, "排序序号不能重复");
+            }
+        }
+
+        LambdaQueryWrapper<Project> wrapper = new LambdaQueryWrapper<>();
+        wrapper.in(Project::getId, idSet)
+                .eq(Project::getTenantId, tenantId)
+                .eq(Project::getUserId, userId);
+        List<Project> existingProjects = projectMapper.selectList(wrapper);
+        if (existingProjects.size() != reorderRequests.size()) {
+            throw new BusinessException(ErrorCode.PROJECT_NOT_FOUND, "存在无权限或不存在的项目");
+        }
+
+        for (ProjectReorderRequest reorderRequest : reorderRequests) {
+            Project update = new Project();
+            update.setId(reorderRequest.getId());
+            update.setTenantId(tenantId);
+            update.setUserId(userId);
+            update.setOrderNo(reorderRequest.getOrderNo());
+            int rows = projectMapper.updateById(update);
+            if (rows != 1) {
+                throw new BusinessException(ErrorCode.SYSTEM_ERROR, "更新项目排序失败");
+            }
+        }
+    }
+
+    /**
      * 归档项目。
      */
     @Override
     public void archive(List<Long> ids) {
         Long userId = UserHolder.get();
+        Long tenantId = resolveTenantId();
         if (userId == null) {
             throw new BusinessException(ErrorCode.NOT_LOGIN_ERROR);
         }
@@ -183,7 +258,9 @@ public class ProjectServiceImpl implements ProjectService {
 
         // 检查所有项目是否存在
         LambdaQueryWrapper<Project> wrapper = new LambdaQueryWrapper<>();
-        wrapper.in(Project::getId, ids).eq(Project::getUserId, userId);
+        wrapper.in(Project::getId, ids)
+                .eq(Project::getTenantId, tenantId)
+                .eq(Project::getUserId, userId);
         List<Project> existingProjects = projectMapper.selectList(wrapper);
         if (existingProjects.size() != ids.size()) {
             throw new BusinessException(ErrorCode.PROJECT_NOT_FOUND);
@@ -199,6 +276,7 @@ public class ProjectServiceImpl implements ProjectService {
         // 批量更新状态为归档
         LambdaUpdateWrapper<Project> updateWrapper = new LambdaUpdateWrapper<>();
         updateWrapper.in(Project::getId, ids)
+                .eq(Project::getTenantId, tenantId)
                 .eq(Project::getUserId, userId)
                 .set(Project::getStatus, ProjectConstant.STATUS_ARCHIVED);
 
@@ -214,6 +292,7 @@ public class ProjectServiceImpl implements ProjectService {
     @Override
     public void delete(Long id) {
         Long userId = UserHolder.get();
+        Long tenantId = resolveTenantId();
         if (userId == null) {
             throw new BusinessException(ErrorCode.NOT_LOGIN_ERROR);
         }
@@ -221,7 +300,9 @@ public class ProjectServiceImpl implements ProjectService {
             throw new BusinessException(ErrorCode.PARAMS_ERROR, "项目 ID 不能为空");
         }
         LambdaQueryWrapper<Project> wrapper = new LambdaQueryWrapper<>();
-        wrapper.eq(Project::getId, id).eq(Project::getUserId, userId);
+        wrapper.eq(Project::getId, id)
+                .eq(Project::getTenantId, tenantId)
+                .eq(Project::getUserId, userId);
         Project existing = projectMapper.selectOne(wrapper);
         if (existing == null) {
             throw new BusinessException(ErrorCode.PROJECT_NOT_FOUND);
@@ -231,6 +312,7 @@ public class ProjectServiceImpl implements ProjectService {
         Project update = new Project();
         update.setId(id);
         update.setDeletedAt(java.time.LocalDateTime.now());
+        update.setTenantId(tenantId);
         update.setUserId(userId);
 
         int rows = projectMapper.updateById(update);
@@ -245,14 +327,17 @@ public class ProjectServiceImpl implements ProjectService {
     @Override
     public void recover(Long id) {
         Long userId = UserHolder.get();
+        Long tenantId = resolveTenantId();
         if (userId == null) {
             throw new BusinessException(ErrorCode.NOT_LOGIN_ERROR);
         }
-        if (id == null) {
+        if (id == null || id <= 0) {
             throw new BusinessException(ErrorCode.PARAMS_ERROR, "项目 ID 不能为空");
         }
         LambdaQueryWrapper<Project> wrapper = new LambdaQueryWrapper<>();
-        wrapper.eq(Project::getId, id).eq(Project::getUserId, userId);
+        wrapper.eq(Project::getId, id)
+                .eq(Project::getTenantId, tenantId)
+                .eq(Project::getUserId, userId);
         Project existing = projectMapper.selectOne(wrapper);
         if (existing == null) {
             throw new BusinessException(ErrorCode.PROJECT_NOT_FOUND);
@@ -268,6 +353,7 @@ public class ProjectServiceImpl implements ProjectService {
         Project update = new Project();
         update.setId(id);
         update.setDeletedAt(null);
+        update.setTenantId(tenantId);
         update.setUserId(userId);
 
         int rows = projectMapper.updateById(update);
@@ -334,5 +420,26 @@ public class ProjectServiceImpl implements ProjectService {
             return 10L;
         }
         return Math.min(pageSize, 100L);
+    }
+
+    /**
+     * 获取当前用户下新的排序号。
+     */
+    private Integer getNextOrderNo(Long tenantId, Long userId) {
+        LambdaQueryWrapper<Project> wrapper = new LambdaQueryWrapper<>();
+        wrapper.eq(Project::getTenantId, tenantId)
+                .eq(Project::getUserId, userId)
+                .isNull(Project::getDeletedAt)
+                .orderByDesc(Project::getOrderNo)
+                .last("LIMIT 1");
+        Project lastProject = projectMapper.selectOne(wrapper);
+        if (lastProject == null || lastProject.getOrderNo() == null) {
+            return 0;
+        }
+        return lastProject.getOrderNo() + 1;
+    }
+
+    private Long resolveTenantId() {
+        return tenantService.resolveCurrentTenantId();
     }
 }
