@@ -1,7 +1,9 @@
 package com.spt.learningmanage.controller;
 
+import com.spt.learningmanage.annotation.RequirePermission;
 import com.spt.learningmanage.common.BaseResponse;
 import com.spt.learningmanage.common.ResultUtils;
+import com.spt.learningmanage.constant.PermissionConstants;
 import com.spt.learningmanage.exception.BusinessException;
 import com.spt.learningmanage.exception.ErrorCode;
 import com.spt.learningmanage.model.dto.project.ProjectCreateRequest;
@@ -29,12 +31,14 @@ public class ProjectController {
     private ProjectService projectService;
 
     // 创建项目，返回项目ID
+    @RequirePermission(PermissionConstants.PROJECT_CREATE)
     @PostMapping("/add")
     public BaseResponse<Long> addProject(@RequestBody ProjectCreateRequest projectCreateRequest) {
         return ResultUtils.ok(projectService.create(projectCreateRequest));
     }
 
     // 根据 id 获取项目详情（VO）
+    @RequirePermission(PermissionConstants.PROJECT_VIEW)
     @GetMapping("/get/{id}")
     public BaseResponse<ProjectVo> getProjectById(@PathVariable Long id) {
         if (id == null || id <= 0) {
@@ -83,6 +87,7 @@ public class ProjectController {
     }
 
     // 删除项目
+    @RequirePermission(PermissionConstants.PROJECT_DELETE)
     @PostMapping("/delete/{id}")
     public BaseResponse<Boolean> deleteProject(@PathVariable Long id) {
         if (id == null || id <= 0) {
