@@ -28,7 +28,16 @@ public enum ErrorCode {
      */
     USER_NOT_FOUND(20001, "用户不存在"),
     ACCOUNT_ALREADY_EXISTS(20002, "账号已存在"),
-    PASSWORD_ERROR(20003, "密码错误");
+    PASSWORD_ERROR(20003, "密码错误"),
+
+    /**
+     * 租户相关 (3xxxx)
+     */
+    TENANT_NOT_FOUND(30001, "租户不存在"),
+    TENANT_CODE_ALREADY_EXISTS(30002, "租户编码已存在"),
+    TENANT_STATUS_INVALID(30003, "租户状态非法"),
+    TENANT_HEADER_INVALID(30004, "租户请求头非法"),
+    TENANT_CONTEXT_MISSING(30005, "租户上下文缺失");
 
     private final int code;
     private final String message;

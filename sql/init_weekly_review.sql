@@ -2,6 +2,7 @@
 CREATE TABLE IF NOT EXISTS `weekly_review`
 (
     `id`                   BIGINT       NOT NULL AUTO_INCREMENT COMMENT '主键ID',
+    `tenant_id`            BIGINT       NOT NULL DEFAULT 0 COMMENT '所属租户ID',
     `user_id`              BIGINT       NOT NULL COMMENT '所属用户ID',
     `year`                 INT          NOT NULL COMMENT '年份',
     `week_no`              INT          NOT NULL COMMENT '本年第几周',
@@ -14,7 +15,9 @@ CREATE TABLE IF NOT EXISTS `weekly_review`
     `create_time`          DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
     `update_time`          DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
     PRIMARY KEY (`id`),
-    UNIQUE KEY `uk_weekly_review_user_year_week` (`user_id`, `year`, `week_no`),
+    UNIQUE KEY `uk_weekly_review_tenant_user_year_week` (`tenant_id`, `user_id`, `year`, `week_no`),
+    KEY `idx_weekly_review_tenant_user_id` (`tenant_id`, `user_id`),
+    KEY `idx_weekly_review_tenant_start_date` (`tenant_id`, `start_date`),
     KEY `idx_weekly_review_user_id` (`user_id`),
     KEY `idx_weekly_review_start_date` (`start_date`),
     KEY `idx_weekly_review_create_time` (`create_time`)

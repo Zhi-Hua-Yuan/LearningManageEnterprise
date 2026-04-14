@@ -1,6 +1,7 @@
 CREATE TABLE `project`
 (
     `id`          BIGINT        NOT NULL AUTO_INCREMENT COMMENT '主键ID',
+    `tenant_id`   BIGINT        NOT NULL DEFAULT 0 COMMENT '所属租户ID',
     `user_id`     BIGINT        NOT NULL COMMENT '所属用户ID',
     `name`        VARCHAR(100)  NOT NULL COMMENT '项目名称',
     `goal`        VARCHAR(500)           DEFAULT NULL COMMENT '项目目标',
@@ -14,6 +15,8 @@ CREATE TABLE `project`
     `update_time` DATETIME      NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
     `deleted_at`  DATETIME               DEFAULT NULL COMMENT '软删除时间',
     PRIMARY KEY (`id`),
+    INDEX `idx_project_tenant_id` (`tenant_id`),
+    INDEX `idx_project_tenant_user_id` (`tenant_id`, `user_id`),
     INDEX `idx_project_user_id` (`user_id`),
     INDEX `idx_project_user_order_no` (`user_id`, `order_no`),
     INDEX `idx_project_status` (`status`),
