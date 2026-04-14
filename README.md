@@ -66,3 +66,34 @@ Error example (`GET /api/demo/error/business`):
 - Business exception: `GET /api/demo/error/business`
 - System exception: `GET /api/demo/error/system`
 - Validation exception: `GET /api/demo/error/validate?value=0`
+
+## RBAC MVP (Round 1)
+
+RBAC 第一轮落地了 4 张核心表：
+
+- `role`（租户内角色，带 `tenant_id`）
+- `permission`（全局权限字典，不带 `tenant_id`）
+- `user_role`（用户在租户下的角色绑定，带 `tenant_id`）
+- `role_permission`（角色权限绑定，带 `tenant_id`）
+
+配套内容：
+
+- SQL: `sql/init_role.sql`, `sql/init_permission.sql`, `sql/init_user_role.sql`, `sql/init_role_permission.sql`, `sql/init_rbac_seed.sql`
+- Entity: `Role`, `Permission`, `UserRole`, `RolePermission`
+- Mapper: `RoleMapper`, `PermissionMapper`, `UserRoleMapper`, `RolePermissionMapper`
+- Service: `RbacService` / `RbacServiceImpl`
+
+说明：
+
+- 权限查询通过 `TenantService.resolveCurrentTenantId()` 获取当前租户。
+- MyBatis 租户拦截白名单已纳入 `role`、`user_role`、`role_permission`。
+
+本地验证：
+
+```powershell
+.\mvnw.cmd -DskipTests compile
+.\mvnw.cmd test
+```
+
+权限命名规范文档：`docs/rbac-permission-naming-v1.md`
+

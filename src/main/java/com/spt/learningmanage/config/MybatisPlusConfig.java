@@ -20,7 +20,8 @@ import java.util.Set;
 public class MybatisPlusConfig {
 
     private static final Set<String> TENANT_CORE_TABLES = Set.of(
-            "project", "task", "milestone", "weekly_review"
+            "project", "task", "milestone", "weekly_review",
+            "role", "user_role", "role_permission"
     );
 
     @Resource
