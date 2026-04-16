@@ -18,6 +18,10 @@ public class Task {
     private Long tenantId;
     private Long projectId;
     private Long milestoneId;
+    /**
+     * 创建者（owner）用户ID。
+     * 当前阶段按 owner 语义存储，暂不表示协作成员或执行人。
+     */
     private Long userId;
     private String title;
     private String description;

@@ -8,7 +8,6 @@ import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.spt.learningmanage.constant.TaskStatusEnum;
 import com.spt.learningmanage.exception.BusinessException;
 import com.spt.learningmanage.exception.ErrorCode;
-import com.spt.learningmanage.utils.UserHolder;
 import com.spt.learningmanage.mapper.MilestoneMapper;
 import com.spt.learningmanage.mapper.ProjectMapper;
 import com.spt.learningmanage.mapper.TaskMapper;
@@ -19,7 +18,7 @@ import com.spt.learningmanage.model.entity.Milestone;
 import com.spt.learningmanage.model.entity.Project;
 import com.spt.learningmanage.model.entity.Task;
 import com.spt.learningmanage.model.vo.task.TaskVo;
-import com.spt.learningmanage.service.TenantService;
+import com.spt.learningmanage.service.TaskAccessService;
 import com.spt.learningmanage.service.TaskService;
 import jakarta.annotation.Resource;
 import org.springframework.beans.BeanUtils;
@@ -32,6 +31,10 @@ import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.util.Objects;
 
+/**
+ * 任务领域服务。
+ * 当前阶段 task.user_id 统一按创建者（owner）语义使用，未引入协作成员或 assignee 字段。
+ */
 @Service
 public class TaskServiceImpl implements TaskService {
 
@@ -45,27 +48,24 @@ public class TaskServiceImpl implements TaskService {
     private MilestoneMapper milestoneMapper;
 
     @Resource
-    private TenantService tenantService;
+    private TaskAccessService taskAccessService;
 
     /**
      * 创建任务，返回任务ID。
-     * 强制校验项目归属当前用户。
+     * 当前阶段通过“可访问项目”入口校验任务创建权限。
      */
     @Override
     public Long create(TaskCreateRequest request) {
-        Long userId = UserHolder.get();
-        if (userId == null) {
-            throw new BusinessException(ErrorCode.NOT_LOGIN_ERROR);
-        }
+        Long userId = taskAccessService.requireCurrentUserId();
         if (request == null) {
             throw new BusinessException(ErrorCode.PARAMS_ERROR, "请求参数不能为空");
         }
         if (request.getProjectId() == null || request.getProjectId() <= 0) {
             throw new BusinessException(ErrorCode.PARAMS_ERROR, "项目 ID 不合法");
         }
-        Project project = validateProjectOwnership(request.getProjectId(), userId);
-        Long tenantId = project.getTenantId() == null ? resolveTenantId() : project.getTenantId();
-        validateMilestoneOwnership(tenantId, request.getProjectId(), request.getMilestoneId(), userId);
+        Project project = taskAccessService.requireAccessibleProjectForTaskCreate(request.getProjectId());
+        Long tenantId = project.getTenantId() == null ? taskAccessService.requireCurrentTenantId() : project.getTenantId();
+        validateMilestoneOwnership(tenantId, request.getProjectId(), request.getMilestoneId());
         validateTitle(request.getTitle());
         validateDescription(request.getDescription());
         validatePriority(request.getPriority());
@@ -96,22 +96,10 @@ public class TaskServiceImpl implements TaskService {
      */
     @Override
     public TaskVo getById(Long id) {
-        Long userId = UserHolder.get();
-        Long tenantId = resolveTenantId();
-        if (userId == null) {
-            throw new BusinessException(ErrorCode.NOT_LOGIN_ERROR);
-        }
         if (id == null) {
             throw new BusinessException(ErrorCode.PARAMS_ERROR, "任务 ID 不能为空");
         }
-        LambdaQueryWrapper<Task> wrapper = new LambdaQueryWrapper<>();
-        wrapper.eq(Task::getId, id)
-                .eq(Task::getTenantId, tenantId)
-                .eq(Task::getUserId, userId);
-        Task task = taskMapper.selectOne(wrapper);
-        if (task == null) {
-            throw new BusinessException(ErrorCode.PARAMS_ERROR, "任务不存在");
-        }
+        Task task = taskAccessService.requireOwnedTask(id);
         return toVo(task);
     }
 
@@ -120,18 +108,11 @@ public class TaskServiceImpl implements TaskService {
      */
     @Override
     public Page<TaskVo> list(TaskQueryRequest request) {
-        Long userId = UserHolder.get();
-        Long tenantId = resolveTenantId();
-        if (userId == null) {
-            throw new BusinessException(ErrorCode.NOT_LOGIN_ERROR);
-        }
         TaskQueryRequest validRequest = request == null ? new TaskQueryRequest() : request;
         long pageNum = safePageNum(validRequest.getPageNum());
         long pageSize = safePageSize(validRequest.getPageSize());
 
-        LambdaQueryWrapper<Task> wrapper = new LambdaQueryWrapper<>();
-        wrapper.eq(Task::getTenantId, tenantId);
-        wrapper.eq(Task::getUserId, userId);
+        LambdaQueryWrapper<Task> wrapper = taskAccessService.ownedQuery();
         if (validRequest.getStatus() != null) {
             wrapper.eq(Task::getStatus, validRequest.getStatus());
         }
@@ -156,24 +137,12 @@ public class TaskServiceImpl implements TaskService {
      */
     @Override
     public void update(TaskUpdateRequest request) {
-        Long userId = UserHolder.get();
-        Long tenantId = resolveTenantId();
-        if (userId == null) {
-            throw new BusinessException(ErrorCode.NOT_LOGIN_ERROR);
-        }
         if (request == null || request.getId() == null) {
             throw new BusinessException(ErrorCode.PARAMS_ERROR, "任务 ID 不能为空");
         }
 
         // 1. 查询任务
-        LambdaQueryWrapper<Task> queryWrapper = new LambdaQueryWrapper<>();
-        queryWrapper.eq(Task::getId, request.getId())
-                .eq(Task::getTenantId, tenantId)
-                .eq(Task::getUserId, userId);
-        Task existing = taskMapper.selectOne(queryWrapper);
-        if (existing == null) {
-            throw new BusinessException(ErrorCode.PARAMS_ERROR, "任务不存在");
-        }
+        Task existing = taskAccessService.requireOwnedTask(request.getId());
 
         // 2. 提取并校验新值
         String newTitle = request.getTitle() != null ? request.getTitle().trim() : existing.getTitle();
@@ -193,10 +162,8 @@ public class TaskServiceImpl implements TaskService {
         Long milestoneId = request.getMilestoneId();
 
         // 3. 使用 UpdateWrapper 构造更新
-        LambdaUpdateWrapper<Task> updateWrapper = new LambdaUpdateWrapper<>();
+        LambdaUpdateWrapper<Task> updateWrapper = taskAccessService.ownedUpdate();
         updateWrapper.eq(Task::getId, request.getId())
-                .eq(Task::getTenantId, tenantId)
-                .eq(Task::getUserId, userId)
                 .set(Task::getTitle, newTitle)
                 .set(Task::getDescription, newDescription)
                 .set(Task::getStatus, newStatus)
@@ -232,22 +199,13 @@ public class TaskServiceImpl implements TaskService {
      */
     @Override
     public void delete(Long id) {
-        Long userId = UserHolder.get();
-        Long tenantId = resolveTenantId();
-        if (userId == null) {
-            throw new BusinessException(ErrorCode.NOT_LOGIN_ERROR);
-        }
         if (id == null) {
             throw new BusinessException(ErrorCode.PARAMS_ERROR, "任务 ID 不能为空");
         }
-        LambdaQueryWrapper<Task> queryWrapper = new LambdaQueryWrapper<>();
-        queryWrapper.eq(Task::getId, id)
-                .eq(Task::getTenantId, tenantId)
-                .eq(Task::getUserId, userId);
-        Task existing = taskMapper.selectOne(queryWrapper);
-        if (existing == null) {
-            throw new BusinessException(ErrorCode.PARAMS_ERROR, "任务不存在");
-        }
+        Task existing = taskAccessService.requireOwnedTask(id);
+
+        LambdaQueryWrapper<Task> queryWrapper = taskAccessService.ownedQuery();
+        queryWrapper.eq(Task::getId, id);
 
         int rows = taskMapper.delete(queryWrapper);
         if (rows != 1) {
@@ -261,36 +219,27 @@ public class TaskServiceImpl implements TaskService {
      * 计算并更新项目/里程碑进度。
      */
     private void calculateAndUpdateProgress(Long tenantId, Long projectId, Long milestoneId) {
-        Long userId = UserHolder.get();
-        if (userId == null) {
-            throw new BusinessException(ErrorCode.NOT_LOGIN_ERROR);
-        }
-        Long activeTenantId = tenantId == null ? resolveTenantId() : tenantId;
+        Long activeTenantId = tenantId == null ? taskAccessService.requireCurrentTenantId() : tenantId;
 
         if (projectId != null) {
-            BigDecimal projectProgress = calculateProgressByCondition(activeTenantId, projectId, null, userId);
-            UpdateWrapper<Project> projectUpdateWrapper = new UpdateWrapper<>();
-            projectUpdateWrapper.eq("id", projectId)
-                    .eq("tenant_id", activeTenantId)
-                    .eq("user_id", userId)
+            BigDecimal projectProgress = calculateProgressByCondition(activeTenantId, projectId, null);
+            UpdateWrapper<Project> projectUpdateWrapper = taskAccessService
+                    .ownedProjectProgressUpdate(projectId, activeTenantId)
                     .set("progress", projectProgress);
             projectMapper.update(null, projectUpdateWrapper);
         }
 
         if (milestoneId != null) {
-            BigDecimal milestoneProgress = calculateProgressByCondition(activeTenantId, projectId, milestoneId, userId);
-            UpdateWrapper<Milestone> milestoneUpdateWrapper = new UpdateWrapper<>();
-            milestoneUpdateWrapper.eq("id", milestoneId)
-                    .eq("tenant_id", activeTenantId)
-                    .eq("user_id", userId)
+            BigDecimal milestoneProgress = calculateProgressByCondition(activeTenantId, projectId, milestoneId);
+            UpdateWrapper<Milestone> milestoneUpdateWrapper = taskAccessService
+                    .ownedMilestoneProgressUpdate(milestoneId, activeTenantId)
                     .set("progress", milestoneProgress);
             milestoneMapper.update(null, milestoneUpdateWrapper);
         }
     }
 
-    private BigDecimal calculateProgressByCondition(Long tenantId, Long projectId, Long milestoneId, Long userId) {
-        QueryWrapper<Task> totalWrapper = new QueryWrapper<>();
-        totalWrapper.eq("tenant_id", tenantId).eq("user_id", userId);
+    private BigDecimal calculateProgressByCondition(Long tenantId, Long projectId, Long milestoneId) {
+        QueryWrapper<Task> totalWrapper = taskAccessService.ownedTaskStatsBaseQuery(tenantId);
         if (projectId != null) {
             totalWrapper.eq("project_id", projectId);
         }
@@ -302,9 +251,7 @@ public class TaskServiceImpl implements TaskService {
             return BigDecimal.ZERO;
         }
 
-        QueryWrapper<Task> doneWrapper = new QueryWrapper<>();
-        doneWrapper.eq("tenant_id", tenantId)
-                .eq("user_id", userId)
+        QueryWrapper<Task> doneWrapper = taskAccessService.ownedTaskStatsBaseQuery(tenantId)
                 .eq("status", TaskStatusEnum.DONE.getValue());
         if (projectId != null) {
             doneWrapper.eq("project_id", projectId);
@@ -320,36 +267,12 @@ public class TaskServiceImpl implements TaskService {
                 .divide(BigDecimal.valueOf(total), 2, RoundingMode.HALF_UP);
     }
 
-    private Project validateProjectOwnership(Long projectId, Long userId) {
-        Long tenantId = resolveTenantId();
-        LambdaQueryWrapper<Project> projectWrapper = new LambdaQueryWrapper<>();
-        projectWrapper.eq(Project::getId, projectId)
-                .eq(Project::getTenantId, tenantId)
-                .eq(Project::getUserId, userId)
-                .isNull(Project::getDeletedAt);
-        Project project = projectMapper.selectOne(projectWrapper);
-        if (project == null) {
-            throw new BusinessException(ErrorCode.PROJECT_NOT_FOUND);
-        }
-        return project;
-    }
 
-    private void validateMilestoneOwnership(Long tenantId, Long projectId, Long milestoneId, Long userId) {
+    private void validateMilestoneOwnership(Long tenantId, Long projectId, Long milestoneId) {
         if (milestoneId == null) {
             return;
         }
-        if (milestoneId <= 0) {
-            throw new BusinessException(ErrorCode.PARAMS_ERROR, "里程碑 ID 不合法");
-        }
-        LambdaQueryWrapper<Milestone> milestoneWrapper = new LambdaQueryWrapper<>();
-        milestoneWrapper.eq(Milestone::getId, milestoneId)
-                .eq(Milestone::getTenantId, tenantId)
-                .eq(Milestone::getProjectId, projectId)
-                .eq(Milestone::getUserId, userId);
-        Milestone milestone = milestoneMapper.selectOne(milestoneWrapper);
-        if (milestone == null) {
-            throw new BusinessException(ErrorCode.PARAMS_ERROR, "里程碑不存在或不属于当前项目");
-        }
+        taskAccessService.requireOwnedMilestoneInProject(milestoneId, tenantId, projectId);
     }
 
     /**
@@ -426,7 +349,4 @@ public class TaskServiceImpl implements TaskService {
         return Math.min(pageSize, 100L);
     }
 
-    private Long resolveTenantId() {
-        return tenantService.resolveCurrentTenantId();
-    }
 }

@@ -1,0 +1,6 @@
+DELETE FROM `task` WHERE `id` BETWEEN 71001 AND 71011;
+DELETE FROM `project` WHERE `id` IN (70001, 70002, 70003);
+DELETE FROM `weekly_review` WHERE `tenant_id` = 100 AND `user_id` IN (92001, 92002);
+DELETE FROM `tenant` WHERE `id` = 100;
+DELETE FROM `user` WHERE `id` IN (92001, 92002);
+
