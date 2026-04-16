@@ -5,16 +5,14 @@ import com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper;
 import com.spt.learningmanage.exception.BusinessException;
 import com.spt.learningmanage.exception.ErrorCode;
 import com.spt.learningmanage.mapper.MilestoneMapper;
-import com.spt.learningmanage.mapper.ProjectMapper;
 import com.spt.learningmanage.model.dto.milestone.MilestoneCreateRequest;
 import com.spt.learningmanage.model.dto.milestone.MilestoneQueryRequest;
 import com.spt.learningmanage.model.dto.milestone.MilestoneUpdateRequest;
 import com.spt.learningmanage.model.entity.Milestone;
 import com.spt.learningmanage.model.entity.Project;
 import com.spt.learningmanage.model.vo.milestone.MilestoneVo;
+import com.spt.learningmanage.service.MilestoneAccessService;
 import com.spt.learningmanage.service.MilestoneService;
-import com.spt.learningmanage.service.TenantService;
-import com.spt.learningmanage.utils.UserHolder;
 import jakarta.annotation.Resource;
 import org.springframework.beans.BeanUtils;
 import org.springframework.stereotype.Service;
@@ -23,6 +21,10 @@ import org.springframework.util.StringUtils;
 import java.math.BigDecimal;
 import java.util.List;
 
+/**
+ * 里程碑领域服务。
+ * 当前阶段 milestone.user_id 统一按创建者（owner）语义使用。
+ */
 @Service
 public class MilestoneServiceImpl implements MilestoneService {
 
@@ -33,23 +35,20 @@ public class MilestoneServiceImpl implements MilestoneService {
     private MilestoneMapper milestoneMapper;
 
     @Resource
-    private ProjectMapper projectMapper;
-
-    @Resource
-    private TenantService tenantService;
+    private MilestoneAccessService milestoneAccessService;
 
     @Override
     public Long create(MilestoneCreateRequest request) {
-        Long userId = getCurrentUserId();
+        Long userId = milestoneAccessService.requireCurrentUserId();
         if (request == null || request.getProjectId() == null) {
             throw new BusinessException(ErrorCode.PARAMS_ERROR, "项目 ID 不能为空");
         }
         validateProjectId(request.getProjectId());
         validateName(request.getName());
-        Project project = ensureProjectOwnedByUser(request.getProjectId(), userId);
-        Long tenantId = project.getTenantId() == null ? resolveTenantId() : project.getTenantId();
+        Project project = milestoneAccessService.requireOwnedProjectForMilestone(request.getProjectId());
+        Long tenantId = project.getTenantId() == null ? milestoneAccessService.requireCurrentTenantId() : project.getTenantId();
 
-        int nextOrderNo = getNextOrderNo(tenantId, request.getProjectId(), userId);
+        int nextOrderNo = getNextOrderNo(request.getProjectId());
         Milestone milestone = new Milestone();
         milestone.setTenantId(tenantId);
         milestone.setProjectId(request.getProjectId());
@@ -68,19 +67,15 @@ public class MilestoneServiceImpl implements MilestoneService {
 
     @Override
     public List<MilestoneVo> list(MilestoneQueryRequest request) {
-        Long userId = getCurrentUserId();
-        Long tenantId = resolveTenantId();
         MilestoneQueryRequest validRequest = request == null ? new MilestoneQueryRequest() : request;
         if (validRequest.getProjectId() == null) {
             throw new BusinessException(ErrorCode.PARAMS_ERROR, "项目 ID 不能为空");
         }
         validateProjectId(validRequest.getProjectId());
-        ensureProjectOwnedByUser(validRequest.getProjectId(), userId);
+        milestoneAccessService.requireOwnedProjectForMilestone(validRequest.getProjectId());
 
-        LambdaQueryWrapper<Milestone> wrapper = new LambdaQueryWrapper<>();
-        wrapper.eq(Milestone::getTenantId, tenantId)
-                .eq(Milestone::getUserId, userId)
-                .eq(Milestone::getProjectId, validRequest.getProjectId());
+        LambdaQueryWrapper<Milestone> wrapper = milestoneAccessService.ownedQuery();
+        wrapper.eq(Milestone::getProjectId, validRequest.getProjectId());
         if (StringUtils.hasText(validRequest.getKeyword())) {
             wrapper.like(Milestone::getName, validRequest.getKeyword());
         }
@@ -91,26 +86,15 @@ public class MilestoneServiceImpl implements MilestoneService {
 
     @Override
     public void update(MilestoneUpdateRequest request) {
-        Long userId = getCurrentUserId();
-        Long tenantId = resolveTenantId();
         if (request == null || request.getId() == null || request.getId() <= 0) {
             throw new BusinessException(ErrorCode.PARAMS_ERROR, "里程碑 ID 不合法");
         }
 
-        LambdaQueryWrapper<Milestone> queryWrapper = new LambdaQueryWrapper<>();
-        queryWrapper.eq(Milestone::getId, request.getId())
-                .eq(Milestone::getTenantId, tenantId)
-                .eq(Milestone::getUserId, userId);
-        Milestone existing = milestoneMapper.selectOne(queryWrapper);
-        if (existing == null) {
-            throw new BusinessException(ErrorCode.NOT_FOUND_ERROR, "里程碑不存在");
-        }
+        Milestone existing = milestoneAccessService.requireOwnedMilestone(request.getId());
 
         boolean hasUpdateField = false;
-        LambdaUpdateWrapper<Milestone> updateWrapper = new LambdaUpdateWrapper<>();
-        updateWrapper.eq(Milestone::getId, request.getId())
-                .eq(Milestone::getTenantId, tenantId)
-                .eq(Milestone::getUserId, userId);
+        LambdaUpdateWrapper<Milestone> updateWrapper = milestoneAccessService.ownedUpdate();
+        updateWrapper.eq(Milestone::getId, request.getId());
 
         if (request.getName() != null) {
             validateName(request.getName());
@@ -120,7 +104,7 @@ public class MilestoneServiceImpl implements MilestoneService {
 
         if (request.getOrderNo() != null) {
             validateOrderNo(request.getOrderNo());
-            ensureOrderNoUnique(tenantId, existing.getProjectId(), userId, request.getOrderNo(), request.getId());
+            ensureOrderNoUnique(existing.getProjectId(), request.getOrderNo(), request.getId());
             updateWrapper.set(Milestone::getOrderNo, request.getOrderNo());
             hasUpdateField = true;
         }
@@ -143,20 +127,14 @@ public class MilestoneServiceImpl implements MilestoneService {
 
     @Override
     public void delete(Long id) {
-        Long userId = getCurrentUserId();
-        Long tenantId = resolveTenantId();
         if (id == null || id <= 0) {
             throw new BusinessException(ErrorCode.PARAMS_ERROR, "里程碑 ID 不合法");
         }
 
-        LambdaQueryWrapper<Milestone> queryWrapper = new LambdaQueryWrapper<>();
-        queryWrapper.eq(Milestone::getId, id)
-                .eq(Milestone::getTenantId, tenantId)
-                .eq(Milestone::getUserId, userId);
-        Milestone existing = milestoneMapper.selectOne(queryWrapper);
-        if (existing == null) {
-            throw new BusinessException(ErrorCode.NOT_FOUND_ERROR, "里程碑不存在");
-        }
+        milestoneAccessService.requireOwnedMilestone(id);
+
+        LambdaQueryWrapper<Milestone> queryWrapper = milestoneAccessService.ownedQuery();
+        queryWrapper.eq(Milestone::getId, id);
 
         int rows = milestoneMapper.delete(queryWrapper);
         if (rows != 1) {
@@ -170,50 +148,24 @@ public class MilestoneServiceImpl implements MilestoneService {
         return vo;
     }
 
-    private int getNextOrderNo(Long tenantId, Long projectId, Long userId) {
-        LambdaQueryWrapper<Milestone> wrapper = new LambdaQueryWrapper<>();
-        wrapper.eq(Milestone::getTenantId, tenantId)
-                .eq(Milestone::getProjectId, projectId)
-                .eq(Milestone::getUserId, userId)
+    private int getNextOrderNo(Long projectId) {
+        LambdaQueryWrapper<Milestone> wrapper = milestoneAccessService.ownedQuery();
+        wrapper.eq(Milestone::getProjectId, projectId)
                 .orderByDesc(Milestone::getOrderNo)
                 .last("limit 1");
         Milestone latest = milestoneMapper.selectOne(wrapper);
         return latest == null || latest.getOrderNo() == null ? 1 : latest.getOrderNo() + 1;
     }
 
-    private Project ensureProjectOwnedByUser(Long projectId, Long userId) {
-        Long tenantId = resolveTenantId();
-        LambdaQueryWrapper<Project> wrapper = new LambdaQueryWrapper<>();
-        wrapper.eq(Project::getId, projectId)
-                .eq(Project::getTenantId, tenantId)
-                .eq(Project::getUserId, userId)
-                .isNull(Project::getDeletedAt);
-        Project project = projectMapper.selectOne(wrapper);
-        if (project == null) {
-            throw new BusinessException(ErrorCode.PROJECT_NOT_FOUND);
-        }
-        return project;
-    }
-
-    private void ensureOrderNoUnique(Long tenantId, Long projectId, Long userId, Integer orderNo, Long milestoneId) {
-        LambdaQueryWrapper<Milestone> wrapper = new LambdaQueryWrapper<>();
-        wrapper.eq(Milestone::getTenantId, tenantId)
-                .eq(Milestone::getProjectId, projectId)
-                .eq(Milestone::getUserId, userId)
+    private void ensureOrderNoUnique(Long projectId, Integer orderNo, Long milestoneId) {
+        LambdaQueryWrapper<Milestone> wrapper = milestoneAccessService.ownedQuery();
+        wrapper.eq(Milestone::getProjectId, projectId)
                 .eq(Milestone::getOrderNo, orderNo)
                 .ne(Milestone::getId, milestoneId);
         Milestone duplicate = milestoneMapper.selectOne(wrapper);
         if (duplicate != null) {
             throw new BusinessException(ErrorCode.PARAMS_ERROR, "该排序号已存在");
         }
-    }
-
-    private Long getCurrentUserId() {
-        Long userId = UserHolder.get();
-        if (userId == null) {
-            throw new BusinessException(ErrorCode.NOT_LOGIN_ERROR);
-        }
-        return userId;
     }
 
     private void validateProjectId(Long projectId) {
@@ -246,9 +198,6 @@ public class MilestoneServiceImpl implements MilestoneService {
         }
     }
 
-    private Long resolveTenantId() {
-        return tenantService.resolveCurrentTenantId();
-    }
 }
 
 

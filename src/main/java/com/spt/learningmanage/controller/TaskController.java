@@ -1,8 +1,10 @@
 package com.spt.learningmanage.controller;
 
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
+import com.spt.learningmanage.annotation.RequirePermission;
 import com.spt.learningmanage.common.BaseResponse;
 import com.spt.learningmanage.common.ResultUtils;
+import com.spt.learningmanage.constant.PermissionConstants;
 import com.spt.learningmanage.exception.BusinessException;
 import com.spt.learningmanage.exception.ErrorCode;
 import com.spt.learningmanage.model.dto.task.TaskCreateRequest;
@@ -69,6 +71,13 @@ public class TaskController {
             throw new BusinessException(ErrorCode.PARAMS_ERROR, "任务 ID 不合法");
         }
         taskService.delete(id);
+        return ResultUtils.ok(true);
+    }
+
+    // 任务指派入口占位（仅做权限落点，不实现协作指派逻辑）
+    @RequirePermission(PermissionConstants.TASK_ASSIGN)
+    @PostMapping("/assign")
+    public BaseResponse<Boolean> assignTask() {
         return ResultUtils.ok(true);
     }
 

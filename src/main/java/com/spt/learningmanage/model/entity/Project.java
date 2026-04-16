@@ -17,6 +17,10 @@ public class Project {
     private Long id;
 
     private Long tenantId;
+    /**
+     * 创建者（owner）用户ID。
+     * 当前阶段仍用于 owner 视角的数据归属与访问过滤。
+     */
     private Long userId;
     private String name;
     private String goal;

@@ -18,6 +18,10 @@ public class Milestone {
 
     private Long tenantId;
     private Long projectId;
+    /**
+     * 创建者（owner）用户ID。
+     * 当前阶段用于里程碑归属标识与 owner 访问过滤。
+     */
     private Long userId;
     private String name;
     private Integer orderNo;

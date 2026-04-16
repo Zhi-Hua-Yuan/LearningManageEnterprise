@@ -30,6 +30,7 @@ class RbacServiceImplTest {
     private RbacServiceImpl rbacService;
 
     private static final Long TENANT_ID = 0L;
+    private static final Long OTHER_TENANT_ID = 1L;
     private static final Long USER_ID = 1001L;
 
     @Test
@@ -84,6 +85,16 @@ class RbacServiceImplTest {
         when(authorizationMapper.countUserRoleByCode(TENANT_ID, USER_ID, "super_admin")).thenReturn(1L);
 
         assertTrue(rbacService.isSuperAdmin(USER_ID, TENANT_ID));
+    }
+
+    @Test
+    void isSuperAdmin_shouldBeTenantScoped_whenSameUserInDifferentTenant() {
+        // 对齐种子语义：super_admin 是租户内角色，同一用户不应跨租户自动放行。
+        when(authorizationMapper.countUserRoleByCode(TENANT_ID, USER_ID, "super_admin")).thenReturn(1L);
+        when(authorizationMapper.countUserRoleByCode(OTHER_TENANT_ID, USER_ID, "super_admin")).thenReturn(0L);
+
+        assertTrue(rbacService.isSuperAdmin(USER_ID, TENANT_ID));
+        assertFalse(rbacService.isSuperAdmin(USER_ID, OTHER_TENANT_ID));
     }
 
     @Test
