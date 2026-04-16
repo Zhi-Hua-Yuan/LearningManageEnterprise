@@ -26,6 +26,8 @@ public class Milestone {
     private String name;
     private Integer orderNo;
     private BigDecimal progress;
+    private LocalDateTime deletedAt;
+    private Integer deleteSource;
 
     @TableLogic
     private Integer isDelete;
