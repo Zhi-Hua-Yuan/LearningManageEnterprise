@@ -48,7 +48,22 @@ public class ProjectAccessServiceImpl implements ProjectAccessService {
     }
 
     @Override
-    public Project requireOwnedProject(Long projectId) {
+    public Project requireOwnedActiveProject(Long projectId) {
+        requireCurrentUserId();
+        if (projectId == null) {
+            throw new BusinessException(ErrorCode.PARAMS_ERROR, "项目 ID 不能为空");
+        }
+        LambdaQueryWrapper<Project> wrapper = ownedActiveQuery();
+        wrapper.eq(Project::getId, projectId);
+        Project project = projectMapper.selectOne(wrapper);
+        if (project == null) {
+            throw new BusinessException(ErrorCode.PROJECT_NOT_FOUND);
+        }
+        return project;
+    }
+
+    @Override
+    public Project requireOwnedProjectIncludingDeleted(Long projectId) {
         requireCurrentUserId();
         if (projectId == null) {
             throw new BusinessException(ErrorCode.PARAMS_ERROR, "项目 ID 不能为空");
@@ -60,6 +75,12 @@ public class ProjectAccessServiceImpl implements ProjectAccessService {
             throw new BusinessException(ErrorCode.PROJECT_NOT_FOUND);
         }
         return project;
+    }
+
+    @Deprecated
+    @Override
+    public Project requireOwnedProject(Long projectId) {
+        return requireOwnedActiveProject(projectId);
     }
 
     @Override
@@ -103,18 +124,34 @@ public class ProjectAccessServiceImpl implements ProjectAccessService {
     }
 
     @Override
+    public LambdaQueryWrapper<Project> ownedActiveQuery() {
+        return ownedQuery().isNull(Project::getDeletedAt);
+    }
+
+    @Override
     public LambdaUpdateWrapper<Project> ownedUpdate() {
         return new LambdaUpdateWrapper<Project>()
                 .eq(Project::getTenantId, requireCurrentTenantId())
                 .eq(Project::getUserId, requireCurrentUserId());
     }
 
+    @Deprecated
     @Override
     public List<Project> listOwnedProjectsByIds(Collection<Long> projectIds) {
         if (projectIds == null || projectIds.isEmpty()) {
             return List.of();
         }
         LambdaQueryWrapper<Project> wrapper = ownedQuery();
+        wrapper.in(Project::getId, projectIds);
+        return projectMapper.selectList(wrapper);
+    }
+
+    @Override
+    public List<Project> listOwnedActiveProjectsByIds(Collection<Long> projectIds) {
+        if (projectIds == null || projectIds.isEmpty()) {
+            return List.of();
+        }
+        LambdaQueryWrapper<Project> wrapper = ownedActiveQuery();
         wrapper.in(Project::getId, projectIds);
         return projectMapper.selectList(wrapper);
     }

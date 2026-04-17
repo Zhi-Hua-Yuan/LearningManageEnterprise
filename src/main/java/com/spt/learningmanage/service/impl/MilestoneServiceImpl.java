@@ -2,10 +2,12 @@ package com.spt.learningmanage.service.impl;
 
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper;
+import com.baomidou.mybatisplus.core.conditions.update.UpdateWrapper;
 import com.spt.learningmanage.constant.DeleteSourceConstant;
 import com.spt.learningmanage.exception.BusinessException;
 import com.spt.learningmanage.exception.ErrorCode;
 import com.spt.learningmanage.mapper.MilestoneMapper;
+import com.spt.learningmanage.mapper.TaskMapper;
 import com.spt.learningmanage.model.dto.milestone.MilestoneCreateRequest;
 import com.spt.learningmanage.model.dto.milestone.MilestoneQueryRequest;
 import com.spt.learningmanage.model.dto.milestone.MilestoneUpdateRequest;
@@ -22,6 +24,7 @@ import org.springframework.transaction.annotation.Transactional;
 import org.springframework.util.StringUtils;
 
 import java.math.BigDecimal;
+import java.time.LocalDateTime;
 import java.util.List;
 
 /**
@@ -140,26 +143,27 @@ public class MilestoneServiceImpl implements MilestoneService {
             throw new BusinessException(ErrorCode.PARAMS_ERROR, "里程碑 ID 不合法");
         }
 
-        milestoneAccessService.requireOwnedMilestone(id);
+        Milestone existing = milestoneAccessService.requireOwnedMilestone(id);
+        LocalDateTime deleteTime = LocalDateTime.now();
 
-        LambdaQueryWrapper<Milestone> queryWrapper = milestoneAccessService.ownedQuery();
-        queryWrapper.eq(Milestone::getId, id);
+        UpdateWrapper<Task> taskUnlinkUpdateWrapper = new UpdateWrapper<>();
+        taskUnlinkUpdateWrapper.eq("tenant_id", existing.getTenantId())
+                .eq("user_id", existing.getUserId())
+                .eq("project_id", existing.getProjectId())
+                .eq("milestone_id", id)
+                .eq("is_delete", 0)
+                .set("milestone_id", null);
+        if (taskMapper != null) {
+            taskMapper.update(null, taskUnlinkUpdateWrapper);
+        }
 
-        LambdaUpdateWrapper<Task> taskUpdateWrapper = new LambdaUpdateWrapper<>();
-        taskUpdateWrapper.eq(Task::getUserId, userId)
-                .eq(Task::getProjectId, existing.getProjectId())
-                .eq(Task::getMilestoneId, id)
-                .set(Task::getMilestoneId, null);
-        taskMapper.update(null, taskUpdateWrapper);
-
-        LambdaUpdateWrapper<Milestone> milestoneUpdateWrapper = new LambdaUpdateWrapper<>();
-        milestoneUpdateWrapper.eq(Milestone::getId, id)
-                .eq(Milestone::getUserId, userId)
-                .set(Milestone::getIsDelete, 1)
-                .set(Milestone::getDeleteSource, DeleteSourceConstant.MANUAL)
-                .set(Milestone::getDeletedAt, java.time.LocalDateTime.now());
-
-        int rows = milestoneMapper.update(null, milestoneUpdateWrapper);
+        int rows = milestoneMapper.softDeleteOwnedMilestone(
+                existing.getTenantId(),
+                existing.getUserId(),
+                id,
+                deleteTime,
+                DeleteSourceConstant.MANUAL
+        );
         if (rows != 1) {
             throw new BusinessException(ErrorCode.SYSTEM_ERROR, "删除里程碑失败");
         }

@@ -4,7 +4,9 @@ import com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper;
 import com.spt.learningmanage.constant.ProjectConstant;
 import com.spt.learningmanage.exception.BusinessException;
 import com.spt.learningmanage.exception.ErrorCode;
+import com.spt.learningmanage.mapper.MilestoneMapper;
 import com.spt.learningmanage.mapper.ProjectMapper;
+import com.spt.learningmanage.mapper.TaskMapper;
 import com.spt.learningmanage.model.dto.project.ProjectUpdateRequest;
 import com.spt.learningmanage.model.entity.Project;
 import com.spt.learningmanage.model.vo.project.ProjectVo;
@@ -25,6 +27,7 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyCollection;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -37,44 +40,50 @@ class ProjectServiceImplAccessControlTest {
     @Mock
     private ProjectAccessService projectAccessService;
 
+    @Mock
+    private TaskMapper taskMapper;
+
+    @Mock
+    private MilestoneMapper milestoneMapper;
+
     @InjectMocks
     private ProjectServiceImpl projectService;
 
     @Test
     void getById_shouldDelegateAccessCheckToProjectAccessService() {
         Project project = buildProject();
-        when(projectAccessService.requireOwnedProject(1L)).thenReturn(project);
+        when(projectAccessService.requireOwnedActiveProject(1L)).thenReturn(project);
 
         ProjectVo result = projectService.getById(1L);
 
         assertNotNull(result);
         assertEquals(1L, result.getId());
-        verify(projectAccessService).requireOwnedProject(1L);
+        verify(projectAccessService).requireOwnedActiveProject(1L);
     }
 
     @Test
     void update_shouldUseUnifiedAccessCheck() {
         Project existing = buildProject();
-        when(projectAccessService.requireOwnedProject(1L)).thenReturn(existing);
+        when(projectAccessService.requireOwnedActiveProject(1L)).thenReturn(existing);
         when(projectMapper.updateById(any(Project.class))).thenReturn(1);
         ProjectUpdateRequest request = new ProjectUpdateRequest();
         request.setId(1L);
 
         projectService.update(request);
 
-        verify(projectAccessService).requireOwnedProject(1L);
+        verify(projectAccessService).requireOwnedActiveProject(1L);
         verify(projectMapper).updateById(any(Project.class));
     }
 
     @Test
     void delete_shouldUseUnifiedAccessCheck() {
         Project existing = buildProject();
-        when(projectAccessService.requireOwnedProject(1L)).thenReturn(existing);
+        when(projectAccessService.requireOwnedProjectIncludingDeleted(1L)).thenReturn(existing);
         when(projectMapper.updateById(any(Project.class))).thenReturn(1);
 
         projectService.delete(1L);
 
-        verify(projectAccessService).requireOwnedProject(1L);
+        verify(projectAccessService).requireOwnedProjectIncludingDeleted(1L);
         verify(projectMapper).updateById(any(Project.class));
     }
 
@@ -82,13 +91,16 @@ class ProjectServiceImplAccessControlTest {
     void recover_shouldUseUnifiedAccessCheck() {
         Project existing = buildProject();
         existing.setDeletedAt(LocalDateTime.now().minusDays(1));
-        when(projectAccessService.requireOwnedProject(1L)).thenReturn(existing);
-        when(projectMapper.updateById(any(Project.class))).thenReturn(1);
+        when(projectAccessService.requireOwnedProjectIncludingDeleted(1L)).thenReturn(existing);
+        when(projectMapper.recoverOwnedProject(any(), any(), any(), any())).thenReturn(1);
 
         projectService.recover(1L);
 
-        verify(projectAccessService).requireOwnedProject(1L);
-        verify(projectMapper).updateById(any(Project.class));
+        verify(projectAccessService).requireOwnedProjectIncludingDeleted(1L);
+        verify(projectMapper).recoverOwnedProject(any(), any(), any(), any());
+        verify(projectMapper, never()).update(any(), any());
+        verify(taskMapper).recoverByProjectId(any(), any(), any());
+        verify(milestoneMapper).recoverByProjectId(any(), any(), any());
     }
 
     @Test
@@ -96,7 +108,7 @@ class ProjectServiceImplAccessControlTest {
         Project existing = buildProject();
         @SuppressWarnings("unchecked")
         LambdaUpdateWrapper<Project> ownedUpdateWrapper = mock(LambdaUpdateWrapper.class);
-        when(projectAccessService.listOwnedProjectsByIds(List.of(1L))).thenReturn(List.of(existing));
+        when(projectAccessService.listOwnedActiveProjectsByIds(List.of(1L))).thenReturn(List.of(existing));
         when(projectAccessService.ownedUpdate()).thenReturn(ownedUpdateWrapper);
         when(ownedUpdateWrapper.in(any(), anyCollection())).thenReturn(ownedUpdateWrapper);
         when(ownedUpdateWrapper.set(any(), any())).thenReturn(ownedUpdateWrapper);
@@ -104,7 +116,7 @@ class ProjectServiceImplAccessControlTest {
 
         projectService.archive(List.of(1L));
 
-        verify(projectAccessService).listOwnedProjectsByIds(List.of(1L));
+        verify(projectAccessService).listOwnedActiveProjectsByIds(List.of(1L));
         verify(projectAccessService).ownedUpdate();
         verify(projectMapper).update(any(), any());
     }

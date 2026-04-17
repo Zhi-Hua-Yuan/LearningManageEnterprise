@@ -2,6 +2,7 @@ package com.spt.learningmanage.service.impl;
 
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper;
+import com.baomidou.mybatisplus.core.conditions.update.UpdateWrapper;
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.spt.learningmanage.constant.DeleteSourceConstant;
 import com.spt.learningmanage.constant.ProjectConstant;
@@ -21,6 +22,7 @@ import com.spt.learningmanage.model.vo.project.ProjectVo;
 import com.spt.learningmanage.service.ProjectAccessService;
 import com.spt.learningmanage.service.ProjectService;
 import jakarta.annotation.Resource;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.BeanUtils;
 import org.springframework.stereotype.Service;
 import org.springframework.util.StringUtils;
@@ -39,6 +41,7 @@ import java.util.Set;
  * 项目领域服务。
  * 当前阶段 user_id 统一按创建者（owner）语义理解，并与 tenant_id 共同参与访问过滤。
  */
+@Slf4j
 @Service
 public class ProjectServiceImpl implements ProjectService {
 
@@ -98,12 +101,7 @@ public class ProjectServiceImpl implements ProjectService {
         if (id == null) {
             throw new BusinessException(ErrorCode.PARAMS_ERROR, "项目 ID 不能为空");
         }
-        Project project = projectAccessService.requireOwnedProject(id);
-        LambdaQueryWrapper<Project> wrapper = new LambdaQueryWrapper<>();
-        wrapper.eq(Project::getId, id)
-                .eq(Project::getUserId, userId)
-                .isNull(Project::getDeletedAt);
-        Project project = projectMapper.selectOne(wrapper);
+        Project project = projectAccessService.requireOwnedActiveProject(id);
         if (project == null) {
             throw new BusinessException(ErrorCode.PROJECT_NOT_FOUND);
         }
@@ -120,8 +118,7 @@ public class ProjectServiceImpl implements ProjectService {
         long pageNum = safePageNum(validProjectQueryRequest.getPageNum());
         long pageSize = safePageSize(validProjectQueryRequest.getPageSize());
 
-        LambdaQueryWrapper<Project> wrapper = projectAccessService.ownedQuery();
-        wrapper.isNull(Project::getDeletedAt);
+        LambdaQueryWrapper<Project> wrapper = projectAccessService.ownedActiveQuery();
         if (validProjectQueryRequest.getStatus() != null) {
             wrapper.eq(Project::getStatus, validProjectQueryRequest.getStatus());
         }
@@ -145,7 +142,7 @@ public class ProjectServiceImpl implements ProjectService {
         if (projectUpdateRequest == null || projectUpdateRequest.getId() == null) {
             throw new BusinessException(ErrorCode.PARAMS_ERROR, "项目 ID 不能为空");
         }
-        Project existing = projectAccessService.requireOwnedProject(projectUpdateRequest.getId());
+        Project existing = projectAccessService.requireOwnedActiveProject(projectUpdateRequest.getId());
 
         String newName = projectUpdateRequest.getName() != null
                 ? projectUpdateRequest.getName().trim() : existing.getName();
@@ -216,7 +213,7 @@ public class ProjectServiceImpl implements ProjectService {
             }
         }
 
-        List<Project> existingProjects = projectAccessService.listOwnedProjectsByIds(idSet);
+        List<Project> existingProjects = projectAccessService.listOwnedActiveProjectsByIds(idSet);
         if (existingProjects.size() != reorderRequests.size()) {
             throw new BusinessException(ErrorCode.PROJECT_NOT_FOUND, "存在无权限或不存在的项目");
         }
@@ -258,7 +255,7 @@ public class ProjectServiceImpl implements ProjectService {
         }
 
         // 检查所有项目是否存在
-        List<Project> existingProjects = projectAccessService.listOwnedProjectsByIds(ids);
+        List<Project> existingProjects = projectAccessService.listOwnedActiveProjectsByIds(ids);
         if (existingProjects.size() != ids.size()) {
             throw new BusinessException(ErrorCode.PROJECT_NOT_FOUND);
         }
@@ -290,10 +287,7 @@ public class ProjectServiceImpl implements ProjectService {
         if (id == null) {
             throw new BusinessException(ErrorCode.PARAMS_ERROR, "项目 ID 不能为空");
         }
-        Project existing = projectAccessService.requireOwnedProject(id);
-        LambdaQueryWrapper<Project> wrapper = new LambdaQueryWrapper<>();
-        wrapper.eq(Project::getId, id).eq(Project::getUserId, userId);
-        Project existing = projectMapper.selectOne(wrapper);
+        Project existing = projectAccessService.requireOwnedProjectIncludingDeleted(id);
         if (existing == null) {
             throw new BusinessException(ErrorCode.PROJECT_NOT_FOUND);
         }
@@ -303,32 +297,36 @@ public class ProjectServiceImpl implements ProjectService {
 
         LocalDateTime deleteTime = LocalDateTime.now();
 
-        LambdaUpdateWrapper<Task> taskDeleteWrapper = new LambdaUpdateWrapper<>();
-        taskDeleteWrapper.eq(Task::getUserId, userId)
-                .eq(Task::getProjectId, id)
-                .eq(Task::getIsDelete, 0)
-                .set(Task::getIsDelete, 1)
-                .set(Task::getDeleteSource, DeleteSourceConstant.PROJECT_CASCADE)
-                .set(Task::getDeletedAt, deleteTime);
-        taskMapper.update(null, taskDeleteWrapper);
+        UpdateWrapper<Task> taskDeleteWrapper = new UpdateWrapper<>();
+        taskDeleteWrapper.eq("tenant_id", existing.getTenantId())
+                .eq("user_id", existing.getUserId())
+                .eq("project_id", id)
+                .eq("is_delete", 0)
+                .set("is_delete", 1)
+                .set("delete_source", DeleteSourceConstant.PROJECT_CASCADE)
+                .set("deleted_at", deleteTime);
+        if (taskMapper != null) {
+            taskMapper.update(null, taskDeleteWrapper);
+        }
 
-        LambdaUpdateWrapper<Milestone> milestoneDeleteWrapper = new LambdaUpdateWrapper<>();
-        milestoneDeleteWrapper.eq(Milestone::getUserId, userId)
-                .eq(Milestone::getProjectId, id)
-                .eq(Milestone::getIsDelete, 0)
-                .set(Milestone::getIsDelete, 1)
-                .set(Milestone::getDeleteSource, DeleteSourceConstant.PROJECT_CASCADE)
-                .set(Milestone::getDeletedAt, deleteTime);
-        milestoneMapper.update(null, milestoneDeleteWrapper);
+        UpdateWrapper<Milestone> milestoneDeleteWrapper = new UpdateWrapper<>();
+        milestoneDeleteWrapper.eq("tenant_id", existing.getTenantId())
+                .eq("user_id", existing.getUserId())
+                .eq("project_id", id)
+                .eq("is_delete", 0)
+                .set("is_delete", 1)
+                .set("delete_source", DeleteSourceConstant.PROJECT_CASCADE)
+                .set("deleted_at", deleteTime);
+        if (milestoneMapper != null) {
+            milestoneMapper.update(null, milestoneDeleteWrapper);
+        }
 
         // 软删除：设置 deletedAt
         Project update = new Project();
         update.setId(id);
-        update.setDeletedAt(java.time.LocalDateTime.now());
         update.setTenantId(existing.getTenantId());
         update.setUserId(existing.getUserId());
         update.setDeletedAt(deleteTime);
-        update.setUserId(userId);
 
         int rows = projectMapper.updateById(update);
         if (rows != 1) {
@@ -345,33 +343,27 @@ public class ProjectServiceImpl implements ProjectService {
         if (id == null || id <= 0) {
             throw new BusinessException(ErrorCode.PARAMS_ERROR, "项目 ID 不能为空");
         }
-        Project existing = projectAccessService.requireOwnedProject(id);
+        Project existing = projectAccessService.requireOwnedProjectIncludingDeleted(id);
         if (existing.getDeletedAt() == null) {
             throw new BusinessException(ErrorCode.PARAMS_ERROR, "项目未被删除，无法恢复");
         }
-        if (existing.getDeletedAt().plusDays(30).isBefore(LocalDateTime.now())) {
-            throw new BusinessException(ErrorCode.PARAMS_ERROR, "项目删除超过30天，无法恢复");
-        }
 
-        // 恢复：清空 deletedAt
-        LambdaUpdateWrapper<Project> updateWrapper = new LambdaUpdateWrapper<>();
-        updateWrapper.eq(Project::getId, id)
-                .eq(Project::getUserId, userId)
-                .set(Project::getDeletedAt, null);
-        Project update = new Project();
-        update.setId(id);
-        update.setDeletedAt(null);
-        update.setTenantId(existing.getTenantId());
-        update.setUserId(existing.getUserId());
-
-        int rows = projectMapper.update(null, updateWrapper);
+        LocalDateTime now = LocalDateTime.now();
+        LocalDateTime recoverAfter = now.minusDays(30);
+        int rows = projectMapper.recoverOwnedProject(existing.getTenantId(), existing.getUserId(), id, recoverAfter);
         if (rows != 1) {
-            throw new BusinessException(ErrorCode.SYSTEM_ERROR, "恢复项目失败");
+            log.warn("recover project rejected, projectId={}, tenantId={}, userId={}, deletedAt={}, recoverAfter={}",
+                    id, existing.getTenantId(), existing.getUserId(), existing.getDeletedAt(), recoverAfter);
+            throw new BusinessException(ErrorCode.PARAMS_ERROR, "项目删除超过30天或状态已变化，无法恢复");
         }
 
-        taskMapper.recoverByProjectId(userId, id);
-        milestoneMapper.recoverByProjectId(userId, id);
+        int recoveredTaskCount = taskMapper.recoverByProjectId(existing.getTenantId(), existing.getUserId(), id);
+        int recoveredMilestoneCount = milestoneMapper.recoverByProjectId(existing.getTenantId(), existing.getUserId(), id);
+
+        log.info("recover project success, projectId={}, tenantId={}, userId={}, recoveredTaskCount={}, recoveredMilestoneCount={}",
+                id, existing.getTenantId(), existing.getUserId(), recoveredTaskCount, recoveredMilestoneCount);
     }
+
 
     /**
      * 将实体转换为VO。
@@ -455,9 +447,8 @@ public class ProjectServiceImpl implements ProjectService {
      * 获取当前用户下新的排序号。
      */
     private Integer getNextOrderNo() {
-        LambdaQueryWrapper<Project> wrapper = projectAccessService.ownedQuery();
-        wrapper.isNull(Project::getDeletedAt)
-                .orderByDesc(Project::getOrderNo)
+        LambdaQueryWrapper<Project> wrapper = projectAccessService.ownedActiveQuery();
+        wrapper.orderByDesc(Project::getOrderNo)
                 .last("LIMIT 1");
         Project lastProject = projectMapper.selectOne(wrapper);
         if (lastProject == null || lastProject.getOrderNo() == null) {

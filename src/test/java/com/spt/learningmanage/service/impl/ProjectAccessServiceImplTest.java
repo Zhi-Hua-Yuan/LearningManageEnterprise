@@ -42,7 +42,7 @@ class ProjectAccessServiceImplTest {
     }
 
     @Test
-    void requireOwnedProject_shouldReturnProject_whenMatchCurrentTenantAndUser() {
+    void requireOwnedActiveProject_shouldReturnProject_whenMatchCurrentTenantAndUser() {
         UserHolder.set(1001L);
         when(tenantService.resolveCurrentTenantId()).thenReturn(0L);
         Project project = new Project();
@@ -51,27 +51,27 @@ class ProjectAccessServiceImplTest {
         project.setUserId(1001L);
         when(projectMapper.selectOne(any())).thenReturn(project);
 
-        Project result = projectAccessService.requireOwnedProject(2001L);
+        Project result = projectAccessService.requireOwnedActiveProject(2001L);
 
         assertSame(project, result);
     }
 
     @Test
-    void requireOwnedProject_shouldThrowNotLogin_whenNoUserInContext() {
+    void requireOwnedActiveProject_shouldThrowNotLogin_whenNoUserInContext() {
         BusinessException exception = assertThrows(BusinessException.class,
-                () -> projectAccessService.requireOwnedProject(2001L));
+                () -> projectAccessService.requireOwnedActiveProject(2001L));
 
         assertEquals(ErrorCode.NOT_LOGIN_ERROR.getCode(), exception.getErrorCode().getCode());
     }
 
     @Test
-    void requireOwnedProject_shouldThrowProjectNotFound_whenNoOwnedProject() {
+    void requireOwnedActiveProject_shouldThrowProjectNotFound_whenNoOwnedProject() {
         UserHolder.set(1001L);
         when(tenantService.resolveCurrentTenantId()).thenReturn(0L);
         when(projectMapper.selectOne(any())).thenReturn(null);
 
         BusinessException exception = assertThrows(BusinessException.class,
-                () -> projectAccessService.requireOwnedProject(2001L));
+                () -> projectAccessService.requireOwnedActiveProject(2001L));
 
         assertEquals(ErrorCode.PROJECT_NOT_FOUND.getCode(), exception.getErrorCode().getCode());
     }

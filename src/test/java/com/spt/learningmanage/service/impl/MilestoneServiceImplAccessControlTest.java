@@ -89,19 +89,13 @@ class MilestoneServiceImplAccessControlTest {
 
     @Test
     void delete_shouldUseOwnedScopeFromAccessService() {
-        @SuppressWarnings("unchecked")
-        LambdaQueryWrapper<Milestone> ownedQueryWrapper = org.mockito.Mockito.mock(LambdaQueryWrapper.class);
-
         when(milestoneAccessService.requireOwnedMilestone(3001L)).thenReturn(new Milestone());
-        when(milestoneAccessService.ownedQuery()).thenReturn(ownedQueryWrapper);
-        when(ownedQueryWrapper.eq(any(), any())).thenReturn(ownedQueryWrapper);
-        when(milestoneMapper.delete(eq(ownedQueryWrapper))).thenReturn(1);
+        when(milestoneMapper.softDeleteOwnedMilestone(any(), any(), eq(3001L), any(), any())).thenReturn(1);
 
         milestoneService.delete(3001L);
 
         verify(milestoneAccessService).requireOwnedMilestone(3001L);
-        verify(milestoneAccessService).ownedQuery();
-        verify(milestoneMapper).delete(eq(ownedQueryWrapper));
+        verify(milestoneMapper).softDeleteOwnedMilestone(any(), any(), eq(3001L), any(), any());
     }
 }
 

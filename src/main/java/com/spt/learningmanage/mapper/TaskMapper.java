@@ -14,10 +14,13 @@ public interface TaskMapper extends BaseMapper<Task> {
 			SET is_delete = 0,
 			    deleted_at = NULL,
 			    delete_source = 0
-			WHERE user_id = #{userId}
+			WHERE tenant_id = #{tenantId}
+			  AND user_id = #{userId}
 			  AND project_id = #{projectId}
 			  AND is_delete = 1
 			  AND delete_source = 2
 			""")
-	int recoverByProjectId(@Param("userId") Long userId, @Param("projectId") Long projectId);
+	int recoverByProjectId(@Param("tenantId") Long tenantId,
+						 @Param("userId") Long userId,
+						 @Param("projectId") Long projectId);
 }

@@ -207,17 +207,19 @@ public class TaskServiceImpl implements TaskService {
         }
         Task existing = taskAccessService.requireOwnedTask(id);
 
+        UpdateWrapper<Task> metadataUpdateWrapper = new UpdateWrapper<>();
+        metadataUpdateWrapper.eq("id", id)
+                .eq("tenant_id", existing.getTenantId())
+                .eq("user_id", existing.getUserId())
+                .eq("is_delete", 0)
+                .set("delete_source", DeleteSourceConstant.MANUAL)
+                .set("deleted_at", LocalDateTime.now());
+        taskMapper.update(null, metadataUpdateWrapper);
+
         LambdaQueryWrapper<Task> queryWrapper = taskAccessService.ownedQuery();
         queryWrapper.eq(Task::getId, id);
 
-        LambdaUpdateWrapper<Task> updateWrapper = new LambdaUpdateWrapper<>();
-        updateWrapper.eq(Task::getId, id)
-                .eq(Task::getUserId, userId)
-                .set(Task::getIsDelete, 1)
-                .set(Task::getDeleteSource, DeleteSourceConstant.MANUAL)
-                .set(Task::getDeletedAt, LocalDateTime.now());
-
-        int rows = taskMapper.update(null, updateWrapper);
+        int rows = taskMapper.delete(queryWrapper);
         if (rows != 1) {
             throw new BusinessException(ErrorCode.SYSTEM_ERROR, "删除任务失败");
         }
